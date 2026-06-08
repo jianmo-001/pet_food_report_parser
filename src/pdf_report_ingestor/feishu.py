@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 from .models import DownloadedFile, ParsedReport, PendingReport
+from .normalization import normalize_date
 from .settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ class FeishuClient:
             self.settings.field_sample_name: report.sample_name,
             self.settings.field_lab: report.lab,
             self.settings.field_client: report.client,
-            self.settings.field_report_date: report.report_date,
+            self.settings.field_report_date: normalize_date(report.report_date),
             self.settings.field_conclusion: report.conclusion,
             self.settings.field_category: report.category,
             self.settings.field_template: _template_label(report),

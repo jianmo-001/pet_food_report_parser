@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .models import ParsedReport
+from .normalization import normalize_date, normalize_date_range
 
 
 def export_report(report: ParsedReport, pdf_path: Path, output_root: Path) -> list[Path]:
@@ -63,14 +64,14 @@ def _main_fields(report: ParsedReport, pdf_path: Path) -> dict[str, object]:
         "客户地址": _first_extra(extra, "客户地址", "委托单位地址"),
         "检测机构": report.lab,
         "检测机构地址": extra.get("检测机构地址"),
-        "报告日期": report.report_date,
-        "发布日期": extra.get("发布日期"),
-        "签发日期": extra.get("签发日期"),
-        "样品接收日期": _first_extra(extra, "样品接收日期", "到样日期", "到样时间"),
-        "检测开始日期": extra.get("检测开始日期"),
-        "检测结束日期": extra.get("检测结束日期"),
-        "检测周期": _first_extra(extra, "检测周期", "样品检测日期"),
-        "生产日期": extra.get("生产日期"),
+        "报告日期": normalize_date(report.report_date),
+        "发布日期": normalize_date(extra.get("发布日期")),
+        "签发日期": normalize_date(extra.get("签发日期")),
+        "样品接收日期": normalize_date(_first_extra(extra, "样品接收日期", "到样日期", "到样时间")),
+        "检测开始日期": normalize_date(extra.get("检测开始日期")),
+        "检测结束日期": normalize_date(extra.get("检测结束日期")),
+        "检测周期": normalize_date_range(_first_extra(extra, "检测周期", "样品检测日期")),
+        "生产日期": normalize_date(extra.get("生产日期")),
         "生产商": _first_extra(extra, "生产商", "生产单位"),
         "检验类别": _first_extra(extra, "检验类别", "检测类型"),
         "检测项目概述": extra.get("检测项目概述"),
