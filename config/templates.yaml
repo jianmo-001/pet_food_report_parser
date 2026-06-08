@@ -1,0 +1,133 @@
+templates:
+  - name: intertek_cn_inspection_report
+    version: "1.0"
+    enabled: true
+    lab: 上海天祥质量技术服务有限公司
+    keywords:
+      - Intertek
+      - 上海天祥质量技术服务有限公司
+      - 报告检出限
+      - 单项判定
+    fields:
+      report_no:
+        - "报告编号[:：]\\s*([A-Z0-9]+)"
+      sample_name:
+        - "样品名称([^\\n\\r]+)"
+      lab:
+        - "(上海天祥质量技术服务有限公司)"
+      client:
+        - "客户名称([^\\n\\r]+)"
+      report_date:
+        - "报告日期(\\d{4}年\\d{1,2}月\\d{1,2}日)"
+        - "签发日期[:：]?(\\d{4}年\\d{1,2}月\\d{1,2}日)"
+      conclusion:
+        - "结论\\s*\\n([^\\n\\r]+)"
+    items:
+      line_patterns: []
+
+  - name: cti_cn_inspection_report
+    version: "1.0"
+    enabled: true
+    lab: 青岛市华测检测技术有限公司
+    keywords:
+      - 华测检测
+      - Centre Testing International
+      - CTI 样品编号
+      - 限量要求
+    fields:
+      report_no:
+        - "报告编号[:：]?\\s*\\n?([A-Z][A-Z0-9]+)"
+      sample_name:
+        - "样品名称\\s*：([^\\n\\r]+(?:\\n[^\\n\\r]+)?)"
+      lab:
+        - "(青岛市华测检测技术有限公司)"
+      client:
+        - "委托单位[:：]?\\s*\\n?([^\\n\\r]+)"
+      report_date:
+        - "日期[:：]?\\s*\\n?(\\d{4} 年\\d{2} 月\\d{2} 日)"
+      conclusion:
+        - "检验结论[:：]?\\s*\\n(.+?)(?=\\n--- page|\\n检测结果)"
+    items:
+      line_patterns: []
+
+  - name: merieux_cn_analysis_certificate
+    version: "1.0"
+    enabled: true
+    lab: 梅里埃检测技术（青岛）有限公司
+    keywords:
+      - Merieux NutriSciences
+      - Certificate of Analysis
+      - 分析证书
+      - Analytes
+      - LOQ/LOD
+    fields:
+      report_no:
+        - "Certificate No\\.\\s*\\n证书编号\\s*\\n([0-9]+)"
+        - "CoA No\\.\\s*([0-9]+)"
+      sample_name:
+        - "Sample Name\\s*\\n样品名称\\s*\\n\\s*([^\\n\\r]+)"
+      lab:
+        - "(梅里埃检测技术（青岛）有限公司)"
+      client:
+        - "Applicant\\s*\\n委托单位\\s*\\nCertificate No\\.\\s*\\n证书编号\\s*\\n[0-9]+\\s*\\n([^\\n\\r]+)"
+        - "Applicant\\s*\\n委托单位\\s*\\nAddress\\s*\\n委托单位地址\\s*\\n([^\\n\\r]+)"
+      report_date:
+        - "签发日期\\s*\\nDate of Issue\\s*\\n(?:[^\\n]+\\n){0,4}(\\d{4}-\\d{2}-\\d{2})"
+      conclusion:
+        - "(Results 结果)"
+    items:
+      line_patterns: []
+
+  - name: sgs_cn_inspection_report
+    version: "1.0"
+    enabled: true
+    lab: 通标标准技术服务（上海）有限公司
+    keywords:
+      - SGS
+      - 通标标准技术服务
+      - SGS 样品ID
+      - 单项说明
+    fields:
+      report_no:
+        - "检测报告\\s*\\n([A-Z]{2,}[0-9]{2}-[0-9\\-]+)"
+      sample_name:
+        - "样品名称[:：]?\\s*\\n([^\\n\\r]+)"
+      lab:
+        - "(通标标准技术服务（[^\\n\\r]+）有限公司)"
+      client:
+        - "客户名称[:：]?\\s*\\n([^\\n\\r]+)"
+      report_date:
+        - "发布日期[:：\\s]*(\\d{4}-\\d{2}-\\d{2})"
+      conclusion:
+        - "检测结果[:：]?\\s*\\n(请参见下一页。)"
+    items:
+      line_patterns: []
+
+  - name: generic_cn_inspection_report
+    version: "1.0"
+    enabled: true
+    lab: 通用检测机构
+    keywords:
+      - 检测报告
+      - 报告编号
+      - 样品名称
+    fields:
+      report_no:
+        - "报告编号[:：\\s]*([A-Za-z0-9\\-_/]+)"
+      sample_name:
+        - "样品名称[:：\\s]*([^\\n\\r]+)"
+      lab:
+        - "检测机构[:：\\s]*([^\\n\\r]+)"
+        - "检验机构[:：\\s]*([^\\n\\r]+)"
+      client:
+        - "委托单位[:：\\s]*([^\\n\\r]+)"
+        - "委托方[:：\\s]*([^\\n\\r]+)"
+      report_date:
+        - "报告日期[:：\\s]*(\\d{4}[年\\-/]\\d{1,2}[月\\-/]\\d{1,2}日?)"
+        - "签发日期[:：\\s]*(\\d{4}[年\\-/]\\d{1,2}[月\\-/]\\d{1,2}日?)"
+      conclusion:
+        - "检验结论[:：\\s]*([^\\n\\r]+)"
+        - "检测结论[:：\\s]*([^\\n\\r]+)"
+    items:
+      line_patterns:
+        - "([^\\n\\r\\d]{2,30})\\s+([<>≤≥]?[0-9]+(?:\\.[0-9]+)?)\\s*([%％a-zA-Zμugmg/kg/]+)?\\s+([^\\n\\r]{0,40})\\s+(合格|不合格|符合|未检出)"

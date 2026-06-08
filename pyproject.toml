@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf-report-ingestor"
+version = "0.1.0"
+description = "Parse inspection report PDFs and write structured data to Feishu Bitable."
+requires-python = ">=3.10"
+dependencies = [
+  "pydantic>=2.7",
+  "pydantic-settings>=2.2",
+  "python-dotenv>=1.0",
+  "requests>=2.31",
+  "PyMuPDF>=1.24",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+ocr = [
+  "paddleocr>=2.7",
+  "paddlepaddle>=2.6",
+]
+dev = [
+  "pytest>=8.0",
+  "reportlab>=4.0",
+]
+
+[project.scripts]
+pdf-report-ingestor = "pdf_report_ingestor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
