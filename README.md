@@ -61,11 +61,19 @@ python -m pdf_report_ingestor.cli export-local data/samples/example.pdf
 报告编号_items.csv
 ```
 
-轮询飞书待解析记录：
+生产第一版建议使用轮询，不依赖飞书自动化插件或公网 webhook。管理员在主表第二列 `PDF附件` 上传 PDF，并把 `解析状态` 设为 `未解析` 或 `待解析` 后，脚本会下载附件、解析 PDF、回填主表字段，并把检测项目写入明细表：
 
 ```bash
 python -m pdf_report_ingestor.cli poll --once
 ```
+
+持续轮询可以直接运行：
+
+```bash
+python -m pdf_report_ingestor.cli poll
+```
+
+轮询间隔由 `.env` 里的 `POLL_INTERVAL_SECONDS` 控制，默认 60 秒。当前脚本也会处理 `解析状态` 为空但已经上传了 `PDF附件` 的记录，方便测试；正式使用时建议统一填 `未解析`。
 
 把本地 `output/` 里的 CSV 创建为新的飞书多维表格：
 
@@ -79,7 +87,7 @@ python -m pdf_report_ingestor.cli import-output-to-feishu --output output
 python -m pdf_report_ingestor.cli append-output-to-feishu --output output
 ```
 
-这种方式需要你先在飞书里手动建好多维表格和两张表，并在 `.env` 里填写：
+`append-output-to-feishu` 和 `poll` 都需要你先在飞书里手动建好多维表格和两张表，并在 `.env` 里填写：
 
 ```text
 FEISHU_BITABLE_APP_TOKEN=多维表格 app_token
@@ -106,10 +114,24 @@ python -m pdf_report_ingestor.cli process-folder "/path/to/pdf-folder" \
 
 默认 `DRY_RUN=true`，不会真实写飞书。确认配置无误后再改成 `DRY_RUN=false`。
 
+## 第一版生产流程
+
+1. 飞书主表第一列保留 `PDF文件名`，第二列建附件字段 `PDF附件`。
+2. 管理员新增一行，上传 PDF 到 `PDF附件`。
+3. 管理员把 `解析状态` 填成 `未解析`，也可以先留空用于测试。
+4. 本地或服务器运行 `python -m pdf_report_ingestor.cli poll`。
+5. 脚本发现待解析记录后，将状态改为 `解析中`。
+6. 脚本通过飞书 Drive API 下载附件，调用本项目的 PDF 解析规则。
+7. 解析成功后，脚本回填主表字段，把 `解析状态` 改为 `解析成功`，并向明细表批量新增检测项目。
+8. 解析失败时，脚本把 `解析状态` 改为 `解析失败`，并写入 `错误原因`。
+
+这个方案不需要先生成 `output/`。`output/` 主要用于本地查看四份示例报告的解析结果，或者把历史解析结果一次性导入已有表格。
+
 ## 飞书多维表格建议字段
 
 ### 检测报告主表
 
+- PDF文件名
 - PDF附件
 - 报告编号
 - 替代报告编号
@@ -127,7 +149,6 @@ python -m pdf_report_ingestor.cli process-folder "/path/to/pdf-folder" \
 - 样品接收日期
 - 检测开始日期
 - 检测结束日期
-- 检测周期
 - 生产日期
 - 生产商
 - 检验类别
@@ -152,6 +173,8 @@ python -m pdf_report_ingestor.cli process-folder "/path/to/pdf-folder" \
 - `SGS样品ID`、`CTI样品编号`、`Sample Number` 统一为 `样品编号`
 - `到样日期`、`Receive Date` 统一为 `样品接收日期`
 - `生产单位`、`Producer` 统一为 `生产商`
+
+飞书多维表格第一列是主字段/索引列，不能作为普通附件字段移动使用。建议第一列保留 `PDF文件名`，第二列设置为 `PDF附件`，留给管理员上传原始 PDF。脚本写入解析结果时默认不填 `PDF附件`，不会覆盖附件列。
 
 ### 检测项目明细表
 

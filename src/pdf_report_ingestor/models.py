@@ -40,6 +40,7 @@ class PendingReport:
     record_id: str
     attachment_token: str
     file_name: str
+    extra: str | None = None
 
 
 @dataclass(frozen=True)

@@ -20,7 +20,7 @@ def process_once(settings: Settings) -> int:
             client.mark_processing(pending.record_id)
             downloaded = client.download_attachment(pending)
             report = parse_pdf(downloaded.path, settings.template_config, tmp_dir=settings.tmp_dir)
-            client.write_success(pending.record_id, report)
+            client.write_success(pending.record_id, report, pdf_file_name=pending.file_name)
             processed += 1
         except Exception as exc:
             logger.exception("failed to process record=%s", pending.record_id)

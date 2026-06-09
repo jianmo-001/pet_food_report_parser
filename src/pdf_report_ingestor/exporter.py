@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .models import ParsedReport
-from .normalization import normalize_date, normalize_date_range
+from .normalization import normalize_date, split_date_range
 
 
 def export_report(report: ParsedReport, pdf_path: Path, output_root: Path) -> list[Path]:
@@ -48,13 +48,21 @@ def _safe_name(value: str) -> str:
 
 
 def _main_fields(report: ParsedReport, pdf_path: Path) -> dict[str, object]:
+    return to_main_fields(report, pdf_path.name)
+
+
+def to_main_fields(report: ParsedReport, pdf_file_name: str | None = None) -> dict[str, object]:
     extra = report.extra_fields
+    period_start, period_end = split_date_range(_first_extra(extra, "检测周期", "样品检测日期"))
+    test_start = normalize_date(extra.get("检测开始日期")) or period_start
+    test_end = normalize_date(extra.get("检测结束日期")) or period_end
     return {
-        "PDF文件名": pdf_path.name,
+        "PDF文件名": pdf_file_name or "",
+        "PDF附件": "",
         "报告编号": report.report_no,
         "替代报告编号": extra.get("替代报告编号"),
         "样品名称": report.sample_name,
-        "样品编号": _first_extra(extra, "样品编号", "SGS样品ID", "CTI样品编号"),
+        "样品编号": _sample_number(extra),
         "样品批号": _first_extra(extra, "样品批号", "批号"),
         "样品规格": _first_extra(extra, "样品规格", "规格型号"),
         "样品数量": _first_extra(extra, "样品数量", "样品量"),
@@ -65,9 +73,8 @@ def _main_fields(report: ParsedReport, pdf_path: Path) -> dict[str, object]:
         "检测机构": report.lab,
         "报告日期": normalize_date(report.report_date),
         "样品接收日期": normalize_date(_first_extra(extra, "样品接收日期", "到样日期", "到样时间")),
-        "检测开始日期": normalize_date(extra.get("检测开始日期")),
-        "检测结束日期": normalize_date(extra.get("检测结束日期")),
-        "检测周期": normalize_date_range(_first_extra(extra, "检测周期", "样品检测日期")),
+        "检测开始日期": test_start,
+        "检测结束日期": test_end,
         "生产日期": normalize_date(extra.get("生产日期")),
         "生产商": _first_extra(extra, "生产商", "生产单位"),
         "检验类别": _first_extra(extra, "检验类别", "检测类型"),
@@ -168,6 +175,16 @@ def _first_extra(extra: dict[str, object], *keys: str) -> object:
         value = extra.get(key)
         if value not in (None, "", []):
             return value
+    return None
+
+
+def _sample_number(extra: dict[str, object]) -> object:
+    value = _first_extra(extra, "样品编号", "SGS样品ID", "CTI样品编号")
+    if value not in (None, "", []):
+        return value
+    description = extra.get("检测样品描述")
+    if isinstance(description, dict):
+        return _first_extra(description, "SGS样品ID", "样品编号", "Sample ID")
     return None
 
 

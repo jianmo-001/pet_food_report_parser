@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 import json
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
-from .models import DownloadedFile, ParsedReport, PendingReport
-from .normalization import normalize_date
+from .exporter import to_main_fields
+from .models import DownloadedFile, ParsedReport, PendingReport, ReportItem
 from .settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -23,19 +25,32 @@ class FeishuClient:
             logger.info("dry-run: skip listing pending Feishu records")
             return []
 
-        records = self._list_records(filter_text='CurrentValue.[解析状态] = "待解析"')
+        records = self._list_records()
         pending: list[PendingReport] = []
         for record in records:
             fields = record.get("fields") or {}
-            attachments = fields.get(self.settings.field_pdf) or []
+            status = _field_text(fields.get(self.settings.field_status))
+            attachments = _attachment_list(fields.get(self.settings.field_pdf))
+            if status not in {"未解析", "待解析", ""}:
+                continue
             if not attachments:
                 continue
             attachment = attachments[0]
+            attachment_token = (
+                attachment.get("file_token")
+                or attachment.get("token")
+                or attachment.get("attachmentToken")
+                or attachment.get("attachment_token")
+            )
+            if not attachment_token:
+                logger.warning("skip record=%s: attachment token missing", record.get("record_id"))
+                continue
             pending.append(
                 PendingReport(
                     record_id=record["record_id"],
-                    attachment_token=attachment.get("file_token") or attachment.get("token"),
-                    file_name=attachment.get("name") or f'{record["record_id"]}.pdf',
+                    attachment_token=str(attachment_token),
+                    file_name=attachment.get("name") or attachment.get("file_name") or f'{record["record_id"]}.pdf',
+                    extra=attachment.get("extra"),
                 )
             )
         return pending
@@ -50,7 +65,8 @@ class FeishuClient:
             "https://open.feishu.cn/open-apis/drive/v1/medias/"
             f"{pending.attachment_token}/download"
         )
-        response = requests.get(url, headers=self._auth_headers(), timeout=60)
+        params = {"extra": pending.extra} if pending.extra else None
+        response = requests.get(url, headers=self._auth_headers(), params=params, timeout=60)
         response.raise_for_status()
         output.write_bytes(response.content)
         return DownloadedFile(path=output, file_name=pending.file_name)
@@ -58,43 +74,20 @@ class FeishuClient:
     def mark_processing(self, record_id: str) -> None:
         self.update_report_record(record_id, {self.settings.field_status: "解析中", self.settings.field_error: ""})
 
-    def write_success(self, record_id: str, report: ParsedReport) -> None:
+    def write_success(self, record_id: str, report: ParsedReport, pdf_file_name: str | None = None) -> None:
         report_fields = {
+            **to_main_fields(report, pdf_file_name),
             self.settings.field_status: "解析成功",
             self.settings.field_error: "",
-            self.settings.field_report_no: report.report_no,
-            self.settings.field_sample_name: report.sample_name,
-            self.settings.field_lab: report.lab,
-            self.settings.field_client: report.client,
-            self.settings.field_report_date: normalize_date(report.report_date),
-            self.settings.field_conclusion: report.conclusion,
-            self.settings.field_category: report.category,
-            self.settings.field_template: _template_label(report),
-            self.settings.field_extra_info: json.dumps(report.extra_fields, ensure_ascii=False),
             self.settings.field_raw_text: report.raw_text[:20000],
+            self.settings.field_extra_info: json.dumps(report.extra_fields, ensure_ascii=False),
         }
-        self.update_report_record(record_id, {key: value for key, value in report_fields.items() if value is not None})
+        report_fields.pop(self.settings.field_pdf, None)
+        self.update_report_record(record_id, _map_field_names(_convert_numbers(_convert_dates(_clean_record_fields(report_fields)))))
 
-        item_records = []
-        for item in report.items:
-            item_records.append(
-                {
-                    "fields": {
-                        self.settings.field_related_report: [record_id],
-                        "检测项目": item.name,
-                        "检测值": item.value,
-                        "单位": item.unit,
-                        "标准要求": item.standard,
-                        "检测方法": item.method,
-                        "单项结论": item.conclusion,
-                        "来源页码": item.source_page,
-                        "来源文本片段": item.source_text,
-                        self.settings.field_item_extra_info: json.dumps(item.extra_fields, ensure_ascii=False),
-                    }
-                }
-            )
+        item_records = [_item_row(report.report_no, index, item) for index, item in enumerate(report.items, 1)]
         if item_records:
-            self.batch_create_item_records(item_records)
+            self.batch_create_records(self.settings.feishu_bitable_app_token, self.settings.feishu_item_table_id, item_records)
 
     def write_failure(self, record_id: str, error: str) -> None:
         self.update_report_record(record_id, {self.settings.field_status: "解析失败", self.settings.field_error: error})
@@ -223,22 +216,30 @@ class FeishuClient:
     def _json_headers(self) -> dict[str, str]:
         return {**self._auth_headers(), "Content-Type": "application/json; charset=utf-8"}
 
-    def _list_records(self, filter_text: str) -> list[dict[str, Any]]:
+    def _list_records(self) -> list[dict[str, Any]]:
         url = (
             "https://open.feishu.cn/open-apis/bitable/v1/apps/"
             f"{self.settings.feishu_bitable_app_token}/tables/{self.settings.feishu_report_table_id}/records/search"
         )
-        response = requests.post(
-            url,
-            headers=self._json_headers(),
-            json={"filter": {"conjunction": "and", "conditions": []}, "automatic_fields": False},
-            timeout=30,
-        )
-        response.raise_for_status()
-        data = response.json()
-        self._ensure_ok(data)
-        records = data.get("data", {}).get("items", [])
-        return [record for record in records if (record.get("fields") or {}).get(self.settings.field_status) == "待解析"]
+        records: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            payload: dict[str, Any] = {
+                "filter": {"conjunction": "and", "conditions": []},
+                "automatic_fields": False,
+                "page_size": 500,
+            }
+            if page_token:
+                payload["page_token"] = page_token
+            response = requests.post(url, headers=self._json_headers(), json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            self._ensure_ok(data)
+            page = data.get("data", {})
+            records.extend(page.get("items", []))
+            if not page.get("has_more"):
+                return records
+            page_token = page.get("page_token")
 
     def _record_url(self, table_id: str, record_id: str) -> str:
         return (
@@ -264,20 +265,60 @@ def _clean_record_fields(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in row.items() if value not in (None, "")}
 
 
-DATE_FIELDS = {"报告日期", "样品接收日期", "检测开始日期", "检测结束日期", "生产日期"}
+def _field_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return str(value).strip()
+    if isinstance(value, list):
+        return "".join(_field_text(item) for item in value).strip()
+    if isinstance(value, dict):
+        for key in ("text", "name", "value"):
+            if key in value:
+                return _field_text(value[key])
+    return str(value).strip()
+
+
+def _attachment_list(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _item_row(report_no: str | None, index: int, item: ReportItem) -> dict[str, Any]:
+    loq = item.extra_fields.get("定量限") or item.extra_fields.get("定量限/检出限") or item.extra_fields.get("报告检出限")
+    return {
+        "关联报告": report_no,
+        "序号": index,
+        "检测项目": item.name,
+        "单位": item.unit,
+        "检测方法": item.method,
+        "检测结果": item.value,
+        "定量限/检出限": loq,
+        "限值": item.standard,
+        "单项结论": item.conclusion,
+        "明细额外信息JSON": json.dumps(item.extra_fields, ensure_ascii=False),
+        "来源文本片段": item.source_text,
+    }
+
+
+FEISHU_DATE_FIELDS = {"报告日期", "样品接收日期", "检测开始日期", "检测结束日期", "生产日期"}
 
 
 def _convert_dates(row: dict[str, Any]) -> dict[str, Any]:
-    """Convert YYYY-MM-DD date strings to Unix timestamps in seconds for Feishu date fields (type=5)."""
+    """Convert YYYY-MM-DD date strings to Unix timestamps in milliseconds for Feishu date fields."""
     result = dict(row)
-    # Only convert type=5 date fields in Feishu
-    for field in ("报告日期", "生产日期", "样品接收日期"):
+    for field in FEISHU_DATE_FIELDS:
         value = result.get(field)
         if value and isinstance(value, str) and len(value) >= 10:
             try:
-                from datetime import datetime
-                dt = datetime.strptime(value[:10], "%Y-%m-%d")
-                result[field] = int(dt.timestamp())  # seconds, not milliseconds
+                date_value = datetime.strptime(value[:10], "%Y-%m-%d").date()
+                dt = datetime.combine(date_value, datetime.min.time(), ZoneInfo("Asia/Shanghai"))
+                result[field] = int(dt.timestamp() * 1000)
             except (ValueError, OSError):
                 pass
     return result

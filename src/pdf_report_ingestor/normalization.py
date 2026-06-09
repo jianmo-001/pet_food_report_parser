@@ -41,3 +41,13 @@ def normalize_date_range(value: object) -> str | None:
             return f"{start} ~ {end}"
     normalized = normalize_date(text)
     return normalized or text
+
+
+def split_date_range(value: object) -> tuple[str | None, str | None]:
+    if value in (None, "", []):
+        return None, None
+    text = str(value).strip()
+    parts = re.split(r"\s*(?:~|～|到|至|-{2,})\s*", text, maxsplit=1)
+    if len(parts) != 2:
+        return None, None
+    return normalize_date(parts[0]), normalize_date(parts[1])
