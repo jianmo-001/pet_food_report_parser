@@ -67,6 +67,43 @@ python -m pdf_report_ingestor.cli export-local data/samples/example.pdf
 python -m pdf_report_ingestor.cli poll --once
 ```
 
+把本地 `output/` 里的 CSV 创建为新的飞书多维表格：
+
+```bash
+python -m pdf_report_ingestor.cli import-output-to-feishu --output output
+```
+
+把本地 `output/` 里的 CSV 写入已有多维表格：
+
+```bash
+python -m pdf_report_ingestor.cli append-output-to-feishu --output output
+```
+
+这种方式需要你先在飞书里手动建好多维表格和两张表，并在 `.env` 里填写：
+
+```text
+FEISHU_BITABLE_APP_TOKEN=多维表格 app_token
+FEISHU_REPORT_TABLE_ID=检测报告主表 table_id
+FEISHU_ITEM_TABLE_ID=检测项目明细表 table_id
+```
+
+批量处理一个文件夹里的 PDF，并直接创建新的飞书多维表格：
+
+```bash
+python -m pdf_report_ingestor.cli process-folder "/path/to/pdf-folder" \
+  --output output/batch \
+  --import-to-feishu
+```
+
+如果部分 PDF 解析失败，默认不会导入飞书，避免漏数据。确认可以接受只导入成功文件时，增加：
+
+```bash
+python -m pdf_report_ingestor.cli process-folder "/path/to/pdf-folder" \
+  --output output/batch \
+  --import-to-feishu \
+  --allow-partial
+```
+
 默认 `DRY_RUN=true`，不会真实写飞书。确认配置无误后再改成 `DRY_RUN=false`。
 
 ## 飞书多维表格建议字段
@@ -86,10 +123,7 @@ python -m pdf_report_ingestor.cli poll --once
 - 客户名称
 - 客户地址
 - 检测机构
-- 检测机构地址
 - 报告日期
-- 发布日期
-- 签发日期
 - 样品接收日期
 - 检测开始日期
 - 检测结束日期
@@ -145,7 +179,53 @@ python -m pdf_report_ingestor.cli poll --once
 - `FEISHU_REPORT_TABLE_ID`
 - `FEISHU_ITEM_TABLE_ID`
 - `FEISHU_BOT_WEBHOOK`
+- `FEISHU_FOLDER_TOKEN`
+- `FEISHU_OUTPUT_BITABLE_NAME`
 - `DRY_RUN`
+
+如果只是把本地 `output/` 导入成一个新的多维表格，至少需要：
+
+```text
+DRY_RUN=false
+FEISHU_APP_ID=你的企业自建应用 App ID
+FEISHU_APP_SECRET=你的企业自建应用 App Secret
+FEISHU_FOLDER_TOKEN=可选，目标飞书文件夹 token
+FEISHU_OUTPUT_BITABLE_NAME=宠物食品检测报告解析结果
+FEISHU_LINK_SHARE_ENTITY=tenant_editable
+```
+
+`FEISHU_FOLDER_TOKEN` 不填时，多维表格会创建在应用默认可访问位置；填入某个云空间文件夹 token 后，会创建到该文件夹。导入命令执行成功后会输出：
+
+```json
+{
+  "app_token": "...",
+  "url": "https://feishu.cn/base/...",
+  "permission": {...},
+  "tables": {
+    "检测报告主表": {"table_id": "...", "records": 4},
+    "检测项目明细表": {"table_id": "...", "records": 60}
+  }
+}
+```
+
+其中 `url` 就是可以打开的多维表格链接。
+
+`FEISHU_LINK_SHARE_ENTITY` 用来设置创建后链接权限：
+
+- 空值：不修改权限
+- `tenant_editable`：组织内获得链接的人可编辑，推荐
+- `tenant_readable`：组织内获得链接的人可阅读
+- `anyone_editable`：互联网上获得链接的人可编辑，风险高且可能被企业策略拦截
+- `anyone_readable`：互联网上获得链接的人可阅读
+
+导入命令会创建两张表：
+
+- `检测报告主表`
+- `检测项目明细表`
+
+当前导入阶段先用文本字段保存，`关联报告` 暂时保存为报告编号文本。后续接正式自动化流程时，再升级为多维表格关联字段。
+
+正式生产使用时，不建议每次上传 PDF 都新建一个多维表格。推荐做法是提前建好固定的“检测报告主表”和“检测项目明细表”，之后管理员上传 PDF 只触发识别和写入固定表。
 
 ## 模板规则
 

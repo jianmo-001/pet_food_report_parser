@@ -10,3 +10,6 @@ output/*
 !output/.gitkeep
 *.pdf
 src/*.egg-info/
+node_modules/
+feishu-plugin/**/node_modules/
+feishu-plugin/**/output/

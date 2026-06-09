@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     feishu_report_table_id: str = ""
     feishu_item_table_id: str = ""
     feishu_bot_webhook: str = ""
+    feishu_folder_token: str = ""
+    feishu_output_bitable_name: str = "宠物食品检测报告解析结果"
+    feishu_link_share_entity: str = "tenant_editable"
 
     field_pdf: str = Field(default="PDF附件")
     field_status: str = Field(default="解析状态")
