@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import json
+import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -11,8 +13,11 @@ import requests
 from .exporter import to_main_fields
 from .models import DownloadedFile, ParsedReport, PendingReport, ReportItem
 from .settings import Settings
+from .wide_table import WIDE_ATTACHMENT_FIELDS, WIDE_DATE_FIELDS, build_wide_row
 
 logger = logging.getLogger(__name__)
+
+RETRYABLE_DOWNLOAD_STATUS_CODES = {500, 502, 503, 504}
 
 
 class FeishuClient:
@@ -20,17 +25,17 @@ class FeishuClient:
         self.settings = settings
         self._tenant_access_token: str | None = None
 
-    def list_pending_reports(self) -> list[PendingReport]:
+    def list_pending_reports(self, table_id: str | None = None) -> list[PendingReport]:
         if self.settings.dry_run or not self.settings.feishu_enabled:
             logger.info("dry-run: skip listing pending Feishu records")
             return []
 
-        records = self._list_records()
+        records = self._list_records(table_id or self.settings.feishu_upload_table_id)
         pending: list[PendingReport] = []
         for record in records:
             fields = record.get("fields") or {}
-            status = _field_text(fields.get(self.settings.field_status))
-            attachments = _attachment_list(fields.get(self.settings.field_pdf))
+            status = _field_text(_field_value(fields, self.settings.field_status))
+            attachments = _attachment_list(_field_value(fields, self.settings.field_pdf))
             if status not in {"未解析", "待解析", ""}:
                 continue
             if not attachments:
@@ -51,6 +56,7 @@ class FeishuClient:
                     attachment_token=str(attachment_token),
                     file_name=attachment.get("name") or attachment.get("file_name") or f'{record["record_id"]}.pdf',
                     extra=attachment.get("extra"),
+                    archive_url=_field_text(_field_value(fields, self.settings.field_archive_url)) or None,
                 )
             )
         return pending
@@ -66,15 +72,118 @@ class FeishuClient:
             f"{pending.attachment_token}/download"
         )
         params = {"extra": pending.extra} if pending.extra else None
-        response = requests.get(url, headers=self._auth_headers(), params=params, timeout=60)
+        response = self._download_with_retry(url, params=params)
         response.raise_for_status()
         output.write_bytes(response.content)
         return DownloadedFile(path=output, file_name=pending.file_name)
 
-    def mark_processing(self, record_id: str) -> None:
-        self.update_report_record(record_id, {self.settings.field_status: "解析中", self.settings.field_error: ""})
+    def _download_with_retry(self, url: str, params: dict[str, Any] | None = None, attempts: int = 3) -> requests.Response:
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.get(url, headers=self._auth_headers(), params=params, timeout=60)
+                if response.status_code not in RETRYABLE_DOWNLOAD_STATUS_CODES:
+                    return response
+                last_error = requests.HTTPError(f"{response.status_code} Server Error", response=response)
+                logger.warning("Feishu attachment download returned %s; retry %s/%s", response.status_code, attempt, attempts)
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                last_error = exc
+                logger.warning("Feishu attachment download failed; retry %s/%s: %s", attempt, attempts, exc)
+            if attempt < attempts:
+                time.sleep(0.5 * attempt)
+        if last_error:
+            raise last_error
+        raise RuntimeError("Feishu attachment download failed without response")
 
-    def write_success(self, record_id: str, report: ParsedReport, pdf_file_name: str | None = None) -> None:
+    def upload_file_to_folder(self, path: Path, file_name: str, folder_token: str) -> str:
+        if self.settings.dry_run or not self.settings.feishu_enabled:
+            logger.info("dry-run: upload file=%s folder=%s", file_name, folder_token)
+            return "dry_run_file_token"
+        url = "https://open.feishu.cn/open-apis/drive/v1/files/upload_all"
+        data = {
+            "file_name": file_name,
+            "parent_type": "explorer",
+            "parent_node": folder_token,
+            "size": str(path.stat().st_size),
+        }
+        with path.open("rb") as file:
+            response = requests.post(
+                url,
+                headers=self._auth_headers(),
+                data=data,
+                files={"file": (file_name, file, "application/pdf")},
+                timeout=120,
+            )
+        response.raise_for_status()
+        payload = response.json()
+        self._ensure_ok(payload)
+        file_token = _find_key(payload, "file_token")
+        if not file_token:
+            raise RuntimeError(f"Feishu upload response missing file_token: {payload}")
+        return str(file_token)
+
+    def find_file_in_folder(self, folder_token: str, file_name: str, file_size: int | None = None) -> str | None:
+        if self.settings.dry_run or not self.settings.feishu_enabled:
+            logger.info("dry-run: find file=%s folder=%s size=%s", file_name, folder_token, file_size)
+            return None
+        for file in self.list_folder_files(folder_token):
+            existing_name = str(file.get("name") or file.get("file_name") or "")
+            if existing_name != file_name:
+                continue
+            if file_size is not None and not _same_file_size(file, file_size):
+                continue
+            token = file.get("token") or file.get("file_token")
+            if token:
+                return str(token)
+        return None
+
+    def list_folder_files(self, folder_token: str) -> list[dict[str, Any]]:
+        files: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            params: dict[str, Any] = {"folder_token": folder_token, "page_size": 200}
+            if page_token:
+                params["page_token"] = page_token
+            response = requests.get(
+                "https://open.feishu.cn/open-apis/drive/v1/files",
+                headers=self._auth_headers(),
+                params=params,
+                timeout=30,
+            )
+            response.raise_for_status()
+            data = response.json()
+            self._ensure_ok(data)
+            page = data.get("data", {})
+            files.extend(page.get("files") or page.get("items") or [])
+            if not page.get("has_more"):
+                return files
+            page_token = page.get("page_token")
+
+    def list_subfolders(self, folder_token: str) -> dict[str, str]:
+        """列出某文件夹下的直接子文件夹，返回 {名字: token}（只读，不含文件）。"""
+        result: dict[str, str] = {}
+        for entry in self.list_folder_files(folder_token):
+            if str(entry.get("type") or "") != "folder":
+                continue
+            name = str(entry.get("name") or entry.get("file_name") or "")
+            token = entry.get("token") or entry.get("file_token")
+            if name and token:
+                result[name] = str(token)
+        return result
+
+    def folder_url(self, folder_token: str) -> str:
+        return f"{self.settings.feishu_archive_domain.rstrip('/')}/drive/folder/{folder_token}"
+
+    def mark_processing(self, record_id: str, table_id: str | None = None) -> None:
+        self.update_record(table_id or self.settings.feishu_upload_table_id, record_id, {self.settings.field_status: "解析中", self.settings.field_error: ""})
+
+    def write_success(
+        self,
+        record_id: str,
+        report: ParsedReport,
+        pdf_file_name: str | None = None,
+        detail_url: str | None = None,
+    ) -> None:
         report_fields = {
             **to_main_fields(report, pdf_file_name),
             self.settings.field_status: "解析成功",
@@ -82,22 +191,61 @@ class FeishuClient:
             self.settings.field_raw_text: report.raw_text[:20000],
             self.settings.field_extra_info: json.dumps(report.extra_fields, ensure_ascii=False),
         }
+        if detail_url:
+            report_fields[self.settings.field_detail_url] = detail_url
         report_fields.pop(self.settings.field_pdf, None)
-        self.update_report_record(record_id, _map_field_names(_convert_numbers(_convert_dates(_clean_record_fields(report_fields)))))
+        self.update_record(
+            self.settings.feishu_report_table_id,
+            record_id,
+            _map_field_names(_convert_numbers(_convert_dates(_clean_record_fields(report_fields)))),
+        )
 
+        self.write_item_records(report)
+
+    def write_wide_report(self, row: dict[str, Any]) -> None:
+        if not self.settings.feishu_wide_table_id:
+            logger.info("FEISHU_WIDE_TABLE_ID not configured: skip product wide table")
+            return
+        self.batch_create_records(self.settings.feishu_bitable_app_token, self.settings.feishu_wide_table_id, [row])
+
+    def write_wide_success(
+        self,
+        record_id: str,
+        report: ParsedReport,
+        pdf_file_name: str | None = None,
+        detail_url: str | None = None,
+    ) -> None:
+        row = build_wide_row(report, pdf_file_name, detail_url)
+        row[self.settings.field_status] = "解析成功"
+        row[self.settings.field_error] = ""
+        row.pop(self.settings.field_pdf, None)
+        self.update_record(
+            self.settings.feishu_wide_table_id,
+            record_id,
+            _map_field_names(_convert_numbers(_convert_dates(_clean_record_fields(row)))),
+        )
+        self.write_item_records(report)
+
+    def write_item_records(self, report: ParsedReport) -> None:
+        if not self.settings.feishu_item_table_id:
+            logger.info("FEISHU_ITEM_TABLE_ID not configured: skip item table")
+            return
         item_records = [_item_row(report.report_no, index, item) for index, item in enumerate(report.items, 1)]
         if item_records:
             self.batch_create_records(self.settings.feishu_bitable_app_token, self.settings.feishu_item_table_id, item_records)
 
-    def write_failure(self, record_id: str, error: str) -> None:
-        self.update_report_record(record_id, {self.settings.field_status: "解析失败", self.settings.field_error: error})
+    def write_failure(self, record_id: str, error: str, table_id: str | None = None) -> None:
+        self.update_record(table_id or self.settings.feishu_upload_table_id, record_id, {self.settings.field_status: "解析失败", self.settings.field_error: error})
         self.notify(f"检测报告解析失败\nrecord_id: {record_id}\n原因: {error}")
 
     def update_report_record(self, record_id: str, fields: dict[str, Any]) -> None:
+        self.update_record(self.settings.feishu_report_table_id, record_id, fields)
+
+    def update_record(self, table_id: str, record_id: str, fields: dict[str, Any]) -> None:
         if self.settings.dry_run or not self.settings.feishu_enabled:
-            logger.info("dry-run: update report %s fields=%s", record_id, fields)
+            logger.info("dry-run: update table=%s record=%s fields=%s", table_id, record_id, fields)
             return
-        url = self._record_url(self.settings.feishu_report_table_id, record_id)
+        url = self._record_url(table_id, record_id)
         response = requests.put(url, headers=self._json_headers(), json={"fields": fields}, timeout=30)
         response.raise_for_status()
         self._ensure_ok(response.json())
@@ -150,6 +298,69 @@ class FeishuClient:
         if not table_id:
             raise RuntimeError(f"Feishu API response missing table_id: {data}")
         return str(table_id)
+
+    def list_table_fields(self, app_token: str, table_id: str) -> list[dict[str, Any]]:
+        if self.settings.dry_run:
+            logger.info("dry-run: list fields app_token=%s table_id=%s", app_token, table_id)
+            return []
+        fields: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            params: dict[str, Any] = {"page_size": 100}
+            if page_token:
+                params["page_token"] = page_token
+            url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+            response = requests.get(url, headers=self._json_headers(), params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            self._ensure_ok(data)
+            page = data.get("data", {})
+            fields.extend(page.get("items", []))
+            if not page.get("has_more"):
+                return fields
+            page_token = page.get("page_token")
+
+    def create_table_field(self, app_token: str, table_id: str, field_name: str, field_type: int = 1) -> str | None:
+        if self.settings.dry_run:
+            logger.info(
+                "dry-run: create field app_token=%s table_id=%s field=%s type=%s",
+                app_token,
+                table_id,
+                field_name,
+                field_type,
+            )
+            return None
+        url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+        response = requests.post(
+            url,
+            headers=self._json_headers(),
+            json={"field_name": field_name, "type": field_type},
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        self._ensure_ok(data)
+        field_id = _find_key(data, "field_id")
+        return str(field_id) if field_id else None
+
+    def ensure_table_fields(self, app_token: str, table_id: str, field_names: list[str]) -> dict[str, Any]:
+        existing_fields = self.list_table_fields(app_token, table_id)
+        existing_names = {str(field.get("field_name")) for field in existing_fields if field.get("field_name")}
+        created: list[str] = []
+        skipped: list[str] = []
+        for field_name in field_names:
+            if field_name in existing_names:
+                skipped.append(field_name)
+                continue
+            if field_name in WIDE_ATTACHMENT_FIELDS:
+                field_type = 17
+            elif field_name in WIDE_DATE_FIELDS:
+                field_type = 5
+            else:
+                field_type = 1
+            self.create_table_field(app_token, table_id, field_name, field_type)
+            created.append(field_name)
+        return {"created": created, "skipped": skipped, "existing_count": len(existing_names)}
 
     def batch_create_records(self, app_token: str, table_id: str, rows: list[dict[str, Any]], batch_size: int = 500) -> int:
         total = 0
@@ -216,10 +427,10 @@ class FeishuClient:
     def _json_headers(self) -> dict[str, str]:
         return {**self._auth_headers(), "Content-Type": "application/json; charset=utf-8"}
 
-    def _list_records(self) -> list[dict[str, Any]]:
+    def _list_records(self, table_id: str) -> list[dict[str, Any]]:
         url = (
             "https://open.feishu.cn/open-apis/bitable/v1/apps/"
-            f"{self.settings.feishu_bitable_app_token}/tables/{self.settings.feishu_report_table_id}/records/search"
+            f"{self.settings.feishu_bitable_app_token}/tables/{table_id}/records/search"
         )
         records: list[dict[str, Any]] = []
         page_token: str | None = None
@@ -281,12 +492,32 @@ def _field_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _same_file_size(file: dict[str, Any], expected_size: int) -> bool:
+    value = file.get("size") or file.get("file_size")
+    if value in (None, ""):
+        return True
+    try:
+        return int(value) == expected_size
+    except (TypeError, ValueError):
+        return True
+
+
 def _attachment_list(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
     if isinstance(value, dict):
         return [value]
     return []
+
+
+def _field_value(fields: dict[str, Any], field_name: str) -> Any:
+    if field_name in fields:
+        return fields[field_name]
+    normalized = field_name.casefold()
+    for key, value in fields.items():
+        if str(key).casefold() == normalized:
+            return value
+    return None
 
 
 def _item_row(report_no: str | None, index: int, item: ReportItem) -> dict[str, Any]:

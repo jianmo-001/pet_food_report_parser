@@ -38,7 +38,7 @@ templates:
       report_no:
         - "报告编号[:：]?\\s*\\n?([A-Z][A-Z0-9]+)"
       sample_name:
-        - "样品名称\\s*：([^\\n\\r]+(?:\\n[^\\n\\r]+)?)"
+        - "样品名称\\s*：\\s*\\n?([^\\n\\r]+(?:\\n[^\\n\\r]+)?)"
       lab:
         - "(青岛市华测检测技术有限公司)"
       client:
@@ -56,23 +56,31 @@ templates:
     lab: 梅里埃检测技术（青岛）有限公司
     keywords:
       - Merieux NutriSciences
+      - 梅里埃检测技术
       - Certificate of Analysis
       - 分析证书
       - Analytes
+      - 分析物
       - LOQ/LOD
+      - 定量限/检出限
+      - 检测开始日期
     fields:
       report_no:
         - "Certificate No\\.\\s*\\n证书编号\\s*\\n([0-9]+)"
         - "CoA No\\.\\s*([0-9]+)"
+        - "报告编号[:：]?\\s*([0-9]+)"
       sample_name:
         - "Sample Name\\s*\\n样品名称\\s*\\n\\s*([^\\n\\r]+)"
+        - "样品名称\\s*\\n\\s*([^\\n\\r]+)"
       lab:
         - "(梅里埃检测技术（青岛）有限公司)"
       client:
         - "Applicant\\s*\\n委托单位\\s*\\nCertificate No\\.\\s*\\n证书编号\\s*\\n[0-9]+\\s*\\n([^\\n\\r]+)"
         - "Applicant\\s*\\n委托单位\\s*\\nAddress\\s*\\n委托单位地址\\s*\\n([^\\n\\r]+)"
+        - "委托单位\\s*\\n([^\\n\\r]+)"
       report_date:
         - "签发日期\\s*\\nDate of Issue\\s*\\n(?:[^\\n]+\\n){0,4}(\\d{4}-\\d{2}-\\d{2})"
+        - "签发日期[:：]\\s*(\\d{4}-\\d{2}-\\d{2})"
       conclusion:
         - "(Results 结果)"
     items:

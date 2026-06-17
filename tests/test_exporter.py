@@ -17,6 +17,14 @@ def test_sgs_nested_sample_id_maps_to_main_sample_number() -> None:
     assert to_main_fields(report)["样品编号"] == "ASH26-0011333-0001"
 
 
+def test_brand_and_product_fields_map_from_sample_name() -> None:
+    report = ParsedReport(sample_name="诚实一口®全价高鲜肉烘焙猫粮")
+    fields = to_main_fields(report)
+
+    assert fields["品牌名称"] == "诚实一口"
+    assert fields["产品名称"] == "诚实一口®全价高鲜肉烘焙猫粮"
+
+
 def test_date_period_maps_to_start_and_end_dates() -> None:
     report = ParsedReport(extra_fields={"检测周期": "2026年3月12日到2026年3月25日"})
     fields = to_main_fields(report)

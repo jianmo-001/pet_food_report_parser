@@ -41,6 +41,7 @@ class PendingReport:
     attachment_token: str
     file_name: str
     extra: str | None = None
+    archive_url: str | None = None
 
 
 @dataclass(frozen=True)

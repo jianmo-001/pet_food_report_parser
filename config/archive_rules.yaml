@@ -1,0 +1,88 @@
+# 归档路由规则（纯规则，无大模型）。
+#
+# 匹配优先级：
+#   1) 产品代号 codes（整词、忽略大小写、去空格，所以 "P40 PLUS" == "P40PLUS"）
+#   2) 类目关键词 keywords（中文子串）
+#   代号永远优先于关键词；同一层内命中字符串最长者优先；并列冲突则判为“未匹配”并进报告清单。
+#
+# folder 的 name 必须与共享文件夹里子文件夹的真实名字完全一致。
+# 没在这里配置的新文件夹：若名字是代号型（如 P50、Q01Plus）会自动派生 codes，零配置即可路由；
+# 若是中文类目型新品，匹配不到时会进“未匹配清单”，提示你来加一行规则。
+
+# 共享文件夹根目录显示名，仅用于回写“归档路径文字”。真实 token 由程序读云端目录得到。
+archive_root_name: "诚实一口大货报告"
+
+folders:
+  - name: "BK01 & BK01Plus & BN01"
+    codes: ["BK01PLUS", "BK01", "BN01"]
+  - name: "HB烘焙幼猫粮OK01"
+    codes: ["OK01"]
+  - name: "K系列"
+    codes: ["K00", "K01PLUS", "K01"]
+  - name: "N01"
+    codes: ["N01"]
+  - name: "N33&N33Plus"
+    codes: ["N33PLUS", "N33"]
+  - name: "O70"
+    codes: ["O70"]
+  - name: "O80"
+    codes: ["O80"]
+  - name: "O90"
+    codes: ["O90"]
+  - name: "P40&SP"
+    codes: ["P40"]
+  - name: "P40Plus"
+    codes: ["P40PLUS"]
+  - name: "p28、p32、pp32、P36、P30、P42"
+    codes: ["PP32", "P28", "P30", "P32", "P36", "P42"]
+  - name: "OXFUR"
+    codes: ["OXFUR"]
+  - name: "HB-OXFIT"
+    codes: ["OXFIT"]
+  - name: "yummy系列"
+    codes: ["YUMMY"]
+  # Fresh 系列主食罐是“同产品、多工厂”：靠文件名里的工厂名区分。
+  # “启鲜”是工厂名，放在 codes（高优先）→ 命中就进启鲜厂；
+  # 没写工厂名的 Fresh 主食罐一律落到下面的 fresh主食罐（另一个厂）。
+  - name: "Fresh猫用主食罐-启鲜"
+    codes: ["启鲜"]
+  - name: "fresh主食罐"
+    keywords: ["Fresh"]
+  - name: "品种粮"
+    codes: ["PROBF", "PROBS", "PROCG"]
+  - name: "主食冻干"
+    codes: ["FD01"]
+    keywords: ["主食冻干"]
+  - name: "猫用主食餐盒"
+    keywords: ["主食餐盒"]
+  - name: "猫用主食罐"
+    keywords: ["主食流心罐", "流心罐"]
+  - name: "HB主食猫条"
+    keywords: ["主食猫条"]
+  - name: "黑金猫"
+    keywords: ["高鲜肉烘焙猫粮"]
+  - name: "黑金狗"
+    keywords: ["高鲜肉烘焙犬粮"]
+  - name: "奶瓶酱"
+    keywords: ["主食湿粮"]
+  - name: "补充性宠物食品"
+    keywords: ["补充性宠物食品"]
+  - name: "可粒派"
+    keywords: ["可粒派"]
+  - name: "零食"
+    keywords: ["宠物零食"]
+    # 二级子目录：靠类目关键词，可靠性低于顶层；匹配不到就落“零食”根目录。
+    # “其他送检（指标检测）”按送检类型分、文件名无特征，故不配关键词、不参与自动路由。
+    subfolders:
+      - name: "补水汤包"
+        keywords: ["补水汤包"]
+      - name: "犬用蔬菜软包"
+        keywords: ["肉蔬软包", "蔬软包"]
+      - name: "零食猫条"
+        keywords: ["猫条"]
+      - name: "零食罐"
+        keywords: ["猫用罐", "原汁鸡"]
+      - name: "零食肉干 肉松海苔 火腿肠等"
+        keywords: ["肉干", "风干", "肉条", "夹心肠", "肉松", "海苔", "嚼嚼", "脆脆", "瓜瓜鸭", "蕉蕉鸡"]
+      - name: "零食冻干"
+        keywords: ["冻干", "雪花酥", "甜甜圈", "烘干", "鸡肉卷", "清新"]

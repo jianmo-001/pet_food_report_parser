@@ -16,7 +16,7 @@ def process_pdf_folder(
     import_to_feishu: bool = False,
     allow_partial: bool = False,
 ) -> dict[str, Any]:
-    pdf_paths = sorted(path for path in input_dir.iterdir() if path.is_file() and path.suffix.lower() == ".pdf")
+    pdf_paths = sorted(path for path in input_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".pdf")
     if not pdf_paths:
         raise RuntimeError(f"未找到 PDF 文件：{input_dir}")
 

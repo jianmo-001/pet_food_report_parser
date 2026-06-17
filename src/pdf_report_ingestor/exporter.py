@@ -13,7 +13,7 @@ from .normalization import normalize_date, split_date_range
 def export_report(report: ParsedReport, pdf_path: Path, output_root: Path) -> list[Path]:
     folder = output_root / _folder_name(report)
     folder.mkdir(parents=True, exist_ok=True)
-    base = _safe_name(report.report_no or pdf_path.stem)
+    base = _unique_output_base(folder, _safe_name(report.report_no or pdf_path.stem))
 
     json_path = folder / f"{base}.json"
     md_path = folder / f"{base}.md"
@@ -47,6 +47,15 @@ def _safe_name(value: str) -> str:
     return value.strip("_") or "report"
 
 
+def _unique_output_base(folder: Path, base: str) -> str:
+    candidate = base
+    index = 2
+    while any((folder / f"{candidate}{suffix}").exists() for suffix in (".json", ".md", "_main.csv", "_items.csv")):
+        candidate = f"{base}_{index}"
+        index += 1
+    return candidate
+
+
 def _main_fields(report: ParsedReport, pdf_path: Path) -> dict[str, object]:
     return to_main_fields(report, pdf_path.name)
 
@@ -56,11 +65,14 @@ def to_main_fields(report: ParsedReport, pdf_file_name: str | None = None) -> di
     period_start, period_end = split_date_range(_first_extra(extra, "检测周期", "样品检测日期"))
     test_start = normalize_date(extra.get("检测开始日期")) or period_start
     test_end = normalize_date(extra.get("检测结束日期")) or period_end
+    brand_name, product_name = _split_brand_product(report.sample_name)
     return {
         "PDF文件名": pdf_file_name or "",
         "PDF附件": "",
         "报告编号": report.report_no,
         "替代报告编号": extra.get("替代报告编号"),
+        "品牌名称": brand_name,
+        "产品名称": product_name,
         "样品名称": report.sample_name,
         "样品编号": _sample_number(extra),
         "样品批号": _first_extra(extra, "样品批号", "批号"),
@@ -192,3 +204,13 @@ def _json_if_needed(value: object) -> object:
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False)
     return value
+
+
+def _split_brand_product(sample_name: str | None) -> tuple[str | None, str | None]:
+    if not sample_name:
+        return None, None
+    value = sample_name.strip()
+    if "®" not in value:
+        return None, value
+    brand, _ = value.split("®", 1)
+    return brand.strip() or None, value

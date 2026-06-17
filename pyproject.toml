@@ -14,6 +14,9 @@ dependencies = [
   "requests>=2.31",
   "PyMuPDF>=1.24",
   "PyYAML>=6.0",
+  "fastapi>=0.115",
+  "jinja2>=3.1",
+  "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +27,7 @@ ocr = [
 dev = [
   "pytest>=8.0",
   "reportlab>=4.0",
+  "httpx>=0.28",
 ]
 
 [project.scripts]
@@ -31,6 +35,9 @@ pdf-report-ingestor = "pdf_report_ingestor.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+pdf_report_ingestor = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

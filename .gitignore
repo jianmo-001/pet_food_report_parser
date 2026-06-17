@@ -3,7 +3,11 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
+.DS_Store
+config/archive_folders.draft.csv
 data/tmp/
+data/reports/
+data/*.db
 data/samples/*
 !data/samples/.gitkeep
 output/*

@@ -59,7 +59,7 @@ def extract_report(text: str, template: TemplateRule, text_source: str) -> Parse
     elif template.name == "cti_cn_inspection_report":
         items = _extract_cti_items(text)
         extra_fields = _extract_cti_extra_fields(text)
-        values["sample_name"] = _clean_multiline(values.get("sample_name"))
+        values["sample_name"] = _extract_cti_sample_name(text) or _clean_multiline(values.get("sample_name"))
         values["conclusion"] = _clean_multiline(values.get("conclusion"))
     elif template.name == "merieux_cn_analysis_certificate":
         items = _extract_merieux_items(text)
@@ -97,7 +97,43 @@ def _first_match(patterns: list[str], text: str) -> str | None:
 def _clean_multiline(value: str | None) -> str | None:
     if value is None:
         return None
-    return " ".join(line.strip() for line in value.splitlines() if line.strip())
+    lines: list[str] = []
+    stop_labels = (
+        "委托单位",
+        "客户名称",
+        "地址",
+        "检验类型",
+        "检测类别",
+        "样品信息",
+        "CTI 样品编号",
+        "样品数量",
+        "样品状态",
+        "生产日期",
+        "样品规格",
+        "生产商",
+        "样品接收日期",
+        "样品检测日期",
+    )
+    for line in value.splitlines():
+        cleaned = line.strip()
+        if not cleaned:
+            continue
+        matched_label = next((label for label in stop_labels if cleaned.startswith(label)), None)
+        if matched_label:
+            break
+        inline_label = _first_inline_label_index(cleaned, stop_labels)
+        if inline_label is not None:
+            cleaned = cleaned[:inline_label].strip()
+            if cleaned:
+                lines.append(cleaned)
+            break
+        lines.append(cleaned)
+    return " ".join(lines) or None
+
+
+def _first_inline_label_index(value: str, labels: tuple[str, ...]) -> int | None:
+    indexes = [index for label in labels if (index := value.find(label)) > 0]
+    return min(indexes) if indexes else None
 
 
 def _extract_items(text: str, patterns: list[str]) -> list[ReportItem]:
@@ -114,7 +150,7 @@ def _extract_items(text: str, patterns: list[str]) -> list[ReportItem]:
             items.append(
                 ReportItem(
                     name=groups[0] or "",
-                    value=groups[1] if len(groups) > 1 else None,
+                    value=_normalize_scientific_notation(groups[1] if len(groups) > 1 else None),
                     unit=groups[2] if len(groups) > 2 else None,
                     standard=groups[3] if len(groups) > 3 else None,
                     conclusion=groups[4] if len(groups) > 4 else None,
@@ -190,6 +226,18 @@ def _extract_cti_extra_fields(text: str) -> dict[str, Any]:
     return {key: _clean_multiline(value) if isinstance(value, str) else value for key, value in fields.items() if value}
 
 
+def _extract_cti_sample_name(text: str) -> str | None:
+    stop_pattern = (
+        r"委托单位|客户名称|地址|检验类型|检测类别|样品信息|CTI\s*样品编号|"
+        r"样品数量|样品状态|生产日期|样品规格|生产商|样品接收日期|样品检测日期|检测项目"
+    )
+    patterns = [
+        rf"样品信息[:：]?\s*\n\s*样品名称\s*[:：]?\s*(.+?)(?=\n\s*(?:{stop_pattern})\s*[:：]?)",
+        rf"样品名称\s*[:：]?\s*(.+?)(?=\n\s*(?:{stop_pattern})\s*[:：]?)",
+    ]
+    return _clean_multiline(_first_match(patterns, text))
+
+
 def _cti_label_value(text: str, label: str) -> str | None:
     return _first_match([rf"{re.escape(label)}\s*\n：([^\n\r]+)"], text)
 
@@ -223,7 +271,7 @@ def _trim_cti_block(block: list[str]) -> list[str]:
 
 
 def _parse_cti_item_block(block: list[str]) -> ReportItem | None:
-    if len(block) < 7 or not re.fullmatch(r"\d{1,2}", block[0]):
+    if len(block) < 5 or not re.fullmatch(r"\d{1,2}", block[0]):
         return None
     body = block[1:]
     unit_index = next((index for index, value in enumerate(body) if _looks_like_unit(value) or value == "/"), None)
@@ -232,9 +280,40 @@ def _parse_cti_item_block(block: list[str]) -> ReportItem | None:
     name = _join_wrapped_name(body[:unit_index])
     unit = body[unit_index]
     tail = body[unit_index + 1 :]
+    if unit == "/" and len(tail) >= 4:
+        conclusion_index = next((index for index, value in enumerate(tail) if value in {"符合", "不符合", "合格", "不合格"}), None)
+        if conclusion_index is not None and conclusion_index >= 2:
+            text_parts = tail[:conclusion_index]
+            split_index = _split_repeated_text_parts(text_parts)
+            method = " ".join(tail[conclusion_index + 1 :]) or None
+            return ReportItem(
+                name=name,
+                value=_join_text_parts(text_parts[:split_index]),
+                unit=unit,
+                standard=_join_text_parts(text_parts[split_index:]),
+                method=method,
+                conclusion=tail[conclusion_index],
+                source_text=" | ".join(block),
+            )
+    if len(tail) >= 3 and _looks_like_method(tail[1]):
+        return ReportItem(
+            name=name,
+            value=_normalize_scientific_notation(tail[0]),
+            unit=unit,
+            method=" ".join(tail[1:]),
+            source_text=" | ".join(block),
+        )
+    if len(tail) == 2:
+        return ReportItem(
+            name=name,
+            value=_normalize_scientific_notation(tail[0]),
+            unit=unit,
+            method=tail[1],
+            source_text=" | ".join(block),
+        )
     if len(tail) < 4:
         return None
-    value, standard, conclusion = tail[0], tail[1], tail[2]
+    value, standard, conclusion = _normalize_scientific_notation(tail[0]), tail[1], tail[2]
     method = " ".join(tail[3:])
     return ReportItem(
         name=name,
@@ -245,6 +324,18 @@ def _parse_cti_item_block(block: list[str]) -> ReportItem | None:
         conclusion=conclusion,
         source_text=" | ".join(block),
     )
+
+
+def _split_repeated_text_parts(parts: list[str]) -> int:
+    if len(parts) % 2 == 0:
+        midpoint = len(parts) // 2
+        if _join_text_parts(parts[:midpoint]) == _join_text_parts(parts[midpoint:]):
+            return midpoint
+    return max(1, len(parts) // 2)
+
+
+def _join_text_parts(parts: list[str]) -> str:
+    return re.sub(r"\s+", "", "".join(parts)).strip()
 
 
 def _is_cti_item_start(lines: list[str], index: int) -> bool:
@@ -321,7 +412,7 @@ def _extract_merieux_page2_fields(text: str) -> dict[str, str]:
 
 
 def _extract_merieux_items(text: str) -> list[ReportItem]:
-    section_match = re.search(r"Sample ID 样品编号[:：][^\n]+\n(.+?)(?:◆：|The specifications|Decision Rule|Sample Photo)", text, flags=re.S)
+    section_match = re.search(r"(?:Sample ID 样品编号|样品编号)[:：][^\n]+\n(.+?)(?:◆：|The specifications|Decision Rule|Sample Photo|样品照片)", text, flags=re.S)
     if not section_match:
         return []
     lines = [line.strip() for line in section_match.group(1).splitlines() if line.strip()]
@@ -333,7 +424,199 @@ def _extract_merieux_items(text: str) -> list[ReportItem]:
         item = _parse_merieux_item_block(block)
         if item:
             items.append(item)
+    if items:
+        return items
+    items = _extract_merieux_chinese_items(lines)
+    if items:
+        return items
+    return _extract_merieux_simple_items(lines)
+
+
+def _extract_merieux_chinese_items(lines: list[str]) -> list[ReportItem]:
+    starts: list[tuple[int, int, int]] = []
+    for index in range(len(lines) - 2):
+        if not re.fullmatch(r"\d{1,2}", lines[index]):
+            continue
+        if re.fullmatch(r"\d+(?:\.\d+)?", lines[index + 1]) or lines[index + 1].startswith("(") or _looks_like_limit(lines[index + 1]):
+            continue
+        unit_index = next((unit_index for unit_index in range(index + 1, min(len(lines), index + 7)) if _unit_from_parenthesized(lines[unit_index])), None)
+        if unit_index is None or unit_index + 1 >= len(lines):
+            continue
+        starts.append((index, unit_index, unit_index + 1))
+    items: list[ReportItem] = []
+    previous_result_end = 0
+    for start, _unit_index, result_index in starts:
+        prefix = lines[previous_result_end:start]
+        previous_result_end = result_index + 1
+        item = _parse_merieux_chinese_item_block(prefix, lines[start : result_index + 1])
+        if item:
+            items.append(item)
     return items
+
+
+def _parse_merieux_chinese_item_block(prefix: list[str], item_parts: list[str]) -> ReportItem | None:
+    if len(item_parts) < 3 or not re.fullmatch(r"\d{1,2}", item_parts[0]):
+        return None
+    unit_index = next((index for index in range(1, len(item_parts) - 1) if _unit_from_parenthesized(item_parts[index])), None)
+    if unit_index is None:
+        return None
+    unit = _unit_from_parenthesized(item_parts[unit_index])
+    if unit is None:
+        return None
+    name_part_with_unit = re.sub(r"\([^)]*(?:%|g/kg|μg/kg|µg/kg|mg/kg|/25g|/25 g|g|CFU/g)[^)]*\)", "", item_parts[unit_index]).strip()
+    name = _join_wrapped_name([*item_parts[1:unit_index], name_part_with_unit])
+    value = _normalize_scientific_notation(item_parts[unit_index + 1])
+
+    prefix = [part for part in prefix if part not in {"---"}]
+    department = None
+    if prefix and prefix[-1].startswith("#"):
+        department = prefix[-1]
+        prefix = prefix[:-1]
+    loq_parts: list[str] = []
+    while prefix and prefix[0] not in {"符合", "不符合", "Pass"}:
+        loq_parts.append(prefix.pop(0))
+        if loq_parts and "定量限" in loq_parts[-1]:
+            break
+    conclusion = None
+    if prefix and prefix[0] in {"符合", "不符合", "Pass"}:
+        conclusion = prefix.pop(0)
+    standard = None
+    if prefix:
+        standard = prefix.pop(0)
+    method_parts = prefix
+    return ReportItem(
+        name=name,
+        unit=unit,
+        value=value,
+        standard=standard,
+        method=" ".join(method_parts) or None,
+        conclusion=conclusion,
+        source_text=" | ".join([*prefix, *item_parts]),
+        extra_fields={key: val for key, val in {"定量限/检出限": " ".join(loq_parts) or None, "部门": department}.items() if val},
+    )
+
+
+def _unit_from_parenthesized(value: str) -> str | None:
+    match = re.search(r"\((%|g/kg|μg/kg|µg/kg|mg/kg|/25g|/25 g|g|CFU/g)\)", value)
+    return match.group(1) if match else None
+
+
+def _extract_merieux_simple_items(lines: list[str]) -> list[ReportItem]:
+    rows = _split_merieux_simple_rows(lines)
+    return [item for row in rows if (item := _parse_merieux_simple_row(row))]
+
+
+def _split_merieux_simple_rows(lines: list[str]) -> list[list[str]]:
+    content = [
+        line
+        for line in lines
+        if line
+        and line not in {
+            "Specification",
+            "限量要求",
+            "In Spec",
+            "判定",
+            "Results",
+            "结果",
+            "Methods",
+            "方法",
+            "Analytes (Units)",
+            "分析物（单位）",
+            "Sections",
+            "部门",
+            "LOQ/LOD",
+            "定量限/检出限",
+        }
+        and not line.startswith("# - ")
+    ]
+    rows: list[list[str]] = []
+    current: list[str] = []
+    for line in content:
+        if current and any(_looks_like_method(value) for value in current) and _looks_like_merieux_simple_analyte(line):
+            rows.append(current)
+            current = [line]
+            continue
+        if _looks_like_merieux_department(line) and current:
+            if any(_looks_like_method(value) for value in current):
+                rows.append(current)
+                current = [line]
+            else:
+                current.append(line)
+            continue
+        current.append(line)
+    if current:
+        rows.append(current)
+    return rows
+
+
+def _parse_merieux_simple_row(row: list[str]) -> ReportItem | None:
+    while row and row[0] == "---":
+        row = row[1:]
+    if not row:
+        return None
+
+    department = None
+    department_index = next((index for index, value in enumerate(row) if _looks_like_merieux_department(value)), None)
+    leading_name_parts: list[str] = []
+    if department_index is not None:
+        department = row[department_index]
+        leading_name_parts = [value for value in row[:department_index] if value != "---"]
+        row = row[department_index + 1 :]
+
+    decision_parts: list[str] = []
+    while row and row[0] in {"Pass", "符合", "---"}:
+        decision_parts.append(row[0])
+        row = row[1:]
+
+    method_index = next((index for index, value in enumerate(row) if _looks_like_method(value)), None)
+    if method_index is None:
+        return None
+    before_method = row[:method_index]
+    method = " ".join(row[method_index:])
+    if len(before_method) < 2:
+        return None
+
+    value_index = next((index for index, value in enumerate(before_method) if _looks_like_result_value(value)), None)
+    if value_index is None and leading_name_parts:
+        value_index = 0
+    if value_index is None:
+        return None
+    name_parts = [*leading_name_parts, *before_method[:value_index]]
+    value = _normalize_scientific_notation(before_method[value_index])
+    standard_parts = before_method[value_index + 1 :]
+    name, unit = _split_merieux_name_and_unit(name_parts)
+    if not name:
+        return None
+    return ReportItem(
+        name=name,
+        unit=unit,
+        value=value,
+        standard=" ".join(standard_parts) or None,
+        method=method,
+        conclusion=" ".join(decision_parts) or None,
+        source_text=" | ".join(row),
+        extra_fields={"部门": department} if department else {},
+    )
+
+
+def _looks_like_merieux_department(value: str) -> bool:
+    return bool(re.fullmatch(r"#?[A-Z0-9]+(?:\s+[A-Z0-9]+)*", value))
+
+
+def _looks_like_merieux_simple_analyte(value: str) -> bool:
+    if value in {"---", "Pass", "符合"} or _looks_like_merieux_department(value):
+        return False
+    if _looks_like_method(value) or _looks_like_result_value(value) or _looks_like_limit(value):
+        return False
+    return bool(re.search(r"[\u4e00-\u9fffA-Za-z]", value))
+
+
+def _looks_like_result_value(value: str) -> bool:
+    return bool(
+        re.fullmatch(r"-?\d+(?:\.\d+)?(?:×10\^?\d+)?", value)
+        or value in {"未检出", "ND", "Pass", "符合"}
+        or value.startswith(("未检出", "<", "≤", ">"))
+    )
 
 
 def _find_merieux_item_starts(lines: list[str]) -> list[int]:
@@ -400,7 +683,7 @@ def _parse_merieux_item_block(block: list[str]) -> ReportItem | None:
     return ReportItem(
         name=name,
         unit=unit,
-        value=" ".join(result_parts),
+        value=_normalize_scientific_notation(" ".join(result_parts)),
         standard=standard,
         method=" ".join(method_parts),
         conclusion=" ".join(decision_parts),
@@ -493,7 +776,7 @@ def _parse_intertek_item_block(block: list[str]) -> ReportItem | None:
     if len(tail) < 5:
         return None
     judgement = tail[-1]
-    result = tail[-2]
+    result = _normalize_scientific_notation(tail[-2])
     lod = tail[-3]
     method_and_requirement = tail[:-3]
     if len(method_and_requirement) >= 2 and (
@@ -568,18 +851,19 @@ def _parse_sgs_item_block(block: list[str]) -> ReportItem | None:
     conclusion = tail[-1] if tail and tail[-1] in {"符合", "合格", "不合格", "未检出", "-"} else None
     if conclusion:
         tail = tail[:-1]
-    if len(tail) >= 4 and _looks_like_method_numeric_section(tail[0]):
-        method = f"{method} {tail[0]}"
-        tail = tail[1:]
-
-    result = tail[0] if tail else None
     quantitation_limit = None
     standard = None
-    if len(tail) == 2:
-        standard = tail[1]
-    elif len(tail) >= 3:
-        quantitation_limit = tail[1]
-        standard = " ".join(tail[2:])
+    if unit is None and method.startswith("Q/") and len(tail) >= 2:
+        split_index = len(tail) // 2
+        result = _normalize_scientific_notation("".join(tail[:split_index]))
+        standard = "".join(tail[split_index:])
+    else:
+        result = _normalize_scientific_notation(tail[0] if tail else None)
+        if len(tail) == 2:
+            standard = tail[1]
+        elif len(tail) >= 3:
+            quantitation_limit = tail[1]
+            standard = " ".join(tail[2:])
 
     return ReportItem(
         name=name,
@@ -597,6 +881,16 @@ def _join_wrapped_name(parts: list[str]) -> str:
     value = "".join(parts)
     value = value.replace("（以干基计）", "（以干基计）")
     return re.sub(r"\s+", "", value)
+
+
+def _normalize_scientific_notation(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    match = re.fullmatch(r"([<>]?\d+(?:\.\d+)?)\s*[×xX]\s*10([+-]?\d+)", text)
+    if not match:
+        return value
+    return f"{match.group(1)}×10^{match.group(2)}"
 
 
 def _trim_sgs_block(body: list[str]) -> list[str]:
@@ -629,19 +923,44 @@ def _trim_sgs_block(body: list[str]) -> list[str]:
 
 
 def _looks_like_unit(value: str) -> bool:
-    return value in {"%", "％", "µg/kg", "μg/kg", "ug/kg", "mg/kg", "g/kg", "/25 g", "/25g", "IU/kg"}
+    return value in {
+        "%",
+        "％",
+        "g",
+        "kg",
+        "µg/kg",
+        "μg/kg",
+        "ug/kg",
+        "mg/kg",
+        "g/kg",
+        "g/100g",
+        "g/100 g",
+        "mg/100g",
+        "mg/100 g",
+        "mg/g",
+        "CFU/g",
+        "/25 g",
+        "/25g",
+        "IU/kg",
+    }
 
 
 def _looks_like_method(value: str) -> bool:
-    return bool(re.search(r"(GB/T|NY/T|GB|SN/T|ISO|AOAC)", value))
+    return bool(re.search(r"(GB/T|NY/T|GB|SN/T|ISO|AOAC|JJF|Q/|实验室方法)", value))
 
 
 def _looks_like_method_continuation(value: str, previous: str) -> bool:
-    return value == "B" and bool(re.search(r"\d\s*$", previous))
-
-
-def _looks_like_method_numeric_section(value: str) -> bool:
-    return bool(re.fullmatch(r"\d+(?:\.\d+)?", value))
+    if value == "B" and bool(re.search(r"\d\s*$", previous)):
+        return True
+    if re.fullmatch(r"\d{4}(?:\s+.*)?", value) and previous.rstrip().endswith("-"):
+        return True
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*", value) and previous.rstrip().endswith("-"):
+        return True
+    if re.fullmatch(r"单\)\s*第[一二三四五六七八九十]+法", value) and "修改" in previous:
+        return True
+    if re.fullmatch(r"第[一二三四五六七八九十]+章节", value):
+        return True
+    return bool(re.fullmatch(r"(?:\d{4}\s+)?第[一二三四五六七八九十]+法(?:\s+[\d.]+)?", value))
 
 
 def _looks_like_limit(value: str) -> bool:

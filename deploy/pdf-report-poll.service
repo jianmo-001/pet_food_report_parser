@@ -1,0 +1,25 @@
+[Unit]
+# 检测报告 PDF 轮询服务：定时扫描飞书宽表 → 下载解析 → 回填 → 归档
+Description=PDF report Feishu poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ↓↓↓ 改成服务器上项目的真实路径和运行用户 ↓↓↓
+WorkingDirectory=/opt/pet_food_report_parser
+ExecStart=/opt/pet_food_report_parser/scripts/run_poll.sh
+User=deploy
+# 崩溃自动重启
+Restart=always
+RestartSec=10
+# 防止异常时疯狂重启：60 秒内最多重启 5 次，超了就停下等人工
+StartLimitIntervalSec=60
+StartLimitBurst=5
+# 日志直接进 journald，用 journalctl 查
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pdf-report-poll
+
+[Install]
+WantedBy=multi-user.target

@@ -5,17 +5,21 @@
 ## 运行逻辑
 
 ```text
-管理员在飞书主表上传 PDF
+管理员在飞书产品检测值宽表上传 PDF
 ↓
 解析状态设为 未解析 / 待解析 / 留空
 ↓
-服务器脚本定时扫描主表
+服务器脚本定时扫描宽表
 ↓
 下载 PDF 附件并解析
 ↓
-回填检测报告主表
+保存 PDF 到服务器本地，完整数据写入 SQLite
 ↓
-新增检测项目明细表
+回填产品检测值宽表当前行
+↓
+写入详情页链接
+↓
+可选新增检测项目明细表
 ↓
 解析状态改为 解析成功 / 解析失败
 ```
@@ -44,21 +48,28 @@ POLL_INTERVAL_SECONDS=60
 FEISHU_APP_ID=你的企业自建应用 App ID
 FEISHU_APP_SECRET=你的企业自建应用 App Secret
 FEISHU_BITABLE_APP_TOKEN=多维表格 app_token
-FEISHU_REPORT_TABLE_ID=检测报告主表 table_id
-FEISHU_ITEM_TABLE_ID=检测项目明细表 table_id
+FEISHU_WIDE_TABLE_ID=产品检测值宽表 table_id
+FEISHU_UPLOAD_TABLE_MODE=wide
+FEISHU_ITEM_TABLE_ID=检测项目明细表 table_id，可选
+
+DATABASE_URL=sqlite:///data/report_store.db
+REPORT_PDF_DIR=data/reports/pdf
+PUBLIC_BASE_URL=http://服务器公网IP
 ```
 
 如果不需要飞书机器人通知，`FEISHU_BOT_WEBHOOK` 可以留空。
 
 ## 飞书表格字段要求
 
-主表建议字段：
+默认上传入口是 `产品检测值宽表`。建议字段：
 
 ```text
-PDF文件名
+产品名称
 PDF附件
 解析状态
 错误原因
+PDF文件名
+品牌名称
 报告编号
 替代报告编号
 样品名称
@@ -88,15 +99,53 @@ PDF附件
 检测项目数量
 其他信息JSON
 原文文本
+详情页链接
+粗蛋白
+粗脂肪
+水分
+粗灰分
+粗纤维
+钙
+总磷
+钙磷比
+钠
+钾
+镁
+锌
+铁
+铜
+锰
+碘
+硒
+牛磺酸
+淀粉
+黄曲霉毒素B1
+沙门氏菌
+氯化物
+维生素A
+维生素D
+维生素E
+维生素B1
+维生素B6
+维生素B12
+叶酸
+胆碱
+烟酸
+泛酸
+核黄素
+净含量
+未映射检测项目JSON
 ```
 
 其中：
 
-- `PDF文件名` 是飞书主字段/索引列。
+- `产品名称` 是飞书主字段/索引列，也是以后对比产品变化的入口。
 - `PDF附件` 是附件字段，用于上传 PDF。
 - `解析状态` 建议用单选字段，选项为 `未解析`、`待解析`、`解析中`、`解析成功`、`解析失败`、`疑似重复`。
 - `错误原因` 建议用多行文本字段。
+- `详情页链接` 建议用文本字段，用于打开服务器详情页。
 - 日期字段如果设置为飞书日期类型，脚本会写入毫秒时间戳。
+- 检测值列第一版建议用文本字段，避免丢失 `<`、`ND`、科学计数法和单位。
 
 明细表建议字段：
 
@@ -114,12 +163,21 @@ PDF附件
 来源文本片段
 ```
 
+建好空表并填写 `FEISHU_WIDE_TABLE_ID` 后，可以自动补齐宽表字段：
+
+```bash
+source .venv/bin/activate
+python -m pdf_report_ingestor.cli ensure-wide-fields
+```
+
 ## 手动测试
 
 先运行一次：
 
 ```bash
 source .venv/bin/activate
+python -m pdf_report_ingestor.cli init-db
+python -m pdf_report_ingestor.cli deploy-check --check-feishu
 python -m pdf_report_ingestor.cli poll --once
 ```
 
@@ -136,7 +194,7 @@ processed=0
 项目提供了启动脚本：
 
 ```bash
-chmod +x scripts/run_poll.sh
+chmod +x scripts/run_poll.sh scripts/run_web.sh
 scripts/run_poll.sh
 ```
 
@@ -144,6 +202,41 @@ scripts/run_poll.sh
 
 ```bash
 .venv/bin/python -m pdf_report_ingestor.cli poll
+```
+
+详情页服务另开一个进程：
+
+```bash
+scripts/run_web.sh
+```
+
+详情页服务建议只监听本机 `127.0.0.1:8000`，不要在安全组里直接开放 8000。公网通过 Nginx 的 80/443 转发到本机 8000。
+
+服务器 `.env` 里设置公网入口：
+
+```bash
+PUBLIC_BASE_URL=http://服务器公网IP
+# 后续有域名和证书后改成：
+# PUBLIC_BASE_URL=https://reports.example.com
+```
+
+浏览器打开 `http://服务器公网IP/report/{飞书record_id}` 可以查看详情页。正式使用时，飞书主表的 `详情页链接` 会自动填入这个公网入口。
+
+Nginx 示例：
+
+```nginx
+server {
+    listen 80;
+    server_name 服务器公网IP;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
 ```
 
 ## 使用 systemd 常驻
@@ -174,12 +267,40 @@ User=你的服务器用户名
 WantedBy=multi-user.target
 ```
 
+再创建 Web 服务：
+
+```bash
+sudo nano /etc/systemd/system/pdf-report-web.service
+```
+
+```ini
+[Unit]
+Description=PDF report detail web server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/pet_food_report_parser
+ExecStart=/path/to/pet_food_report_parser/scripts/run_web.sh
+Restart=always
+RestartSec=10
+User=你的服务器用户名
+Environment=HOST=127.0.0.1
+Environment=PORT=8000
+
+[Install]
+WantedBy=multi-user.target
+```
+
 启动：
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable pdf-report-poll
+sudo systemctl enable pdf-report-web
 sudo systemctl start pdf-report-poll
+sudo systemctl start pdf-report-web
 ```
 
 查看状态和日志：
@@ -187,6 +308,8 @@ sudo systemctl start pdf-report-poll
 ```bash
 sudo systemctl status pdf-report-poll
 sudo journalctl -u pdf-report-poll -f
+sudo systemctl status pdf-report-web
+sudo journalctl -u pdf-report-web -f
 ```
 
 ## 更新代码
@@ -196,6 +319,7 @@ git pull
 source .venv/bin/activate
 pip install -e ".[dev,ocr]"
 sudo systemctl restart pdf-report-poll
+sudo systemctl restart pdf-report-web
 ```
 
 ## 常见问题
