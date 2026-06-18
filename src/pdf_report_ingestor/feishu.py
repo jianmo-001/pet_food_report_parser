@@ -537,7 +537,7 @@ def _item_row(report_no: str | None, index: int, item: ReportItem) -> dict[str, 
     }
 
 
-FEISHU_DATE_FIELDS = {"报告日期", "样品接收日期", "检测开始日期", "检测结束日期", "生产日期"}
+FEISHU_DATE_FIELDS = {"报告日期", "报告过期时间", "样品接收日期", "检测开始日期", "检测结束日期", "生产日期"}
 
 
 def _convert_dates(row: dict[str, Any]) -> dict[str, Any]:

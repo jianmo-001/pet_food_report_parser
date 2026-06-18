@@ -269,6 +269,7 @@ WIDE_BASE_FIELDS = [
     "样品名称",
     "检测机构",
     "报告日期",
+    "报告过期时间",
     "样品接收日期",
     "检测开始日期",
     "检测结束日期",
@@ -279,7 +280,7 @@ WIDE_BASE_FIELDS = [
 
 WIDE_EXTRA_FIELDS = ["未映射检测项目JSON"]
 
-WIDE_DATE_FIELDS = {"报告日期", "样品接收日期", "检测开始日期", "检测结束日期"}
+WIDE_DATE_FIELDS = {"报告日期", "报告过期时间", "样品接收日期", "检测开始日期", "检测结束日期"}
 WIDE_ATTACHMENT_FIELDS = {"PDF附件"}
 
 
@@ -317,6 +318,7 @@ def build_wide_row(
         "样品名称": report.sample_name,
         "检测机构": report.lab,
         "报告日期": main_fields.get("报告日期"),
+        "报告过期时间": main_fields.get("报告过期时间"),
         "样品接收日期": main_fields.get("样品接收日期"),
         "检测开始日期": main_fields.get("检测开始日期"),
         "检测结束日期": main_fields.get("检测结束日期"),

@@ -49,6 +49,7 @@ def test_build_wide_row_values_and_unmapped_items() -> None:
 
     assert row["品牌名称"] == "诚实一口"
     assert row["产品名称"] == "诚实一口®测试产品"
+    assert row["报告过期时间"] == "2027-06-10"
     assert row["粗蛋白（%）"] == "46.94"
     assert row["维生素A（IU/kg）"] == "3.43×10^4"
     assert "未知项目" in row["未映射检测项目JSON"]
@@ -69,7 +70,7 @@ def test_wide_field_names_include_required_fields() -> None:
     assert "维生素A（IU/kg）" in fields
     assert "未映射检测项目JSON" in fields
     assert "δ-HCH（μg/kg）" in fields
-    assert WIDE_DATE_FIELDS == {"报告日期", "样品接收日期", "检测开始日期", "检测结束日期"}
+    assert WIDE_DATE_FIELDS == {"报告日期", "报告过期时间", "样品接收日期", "检测开始日期", "检测结束日期"}
     assert WIDE_ATTACHMENT_FIELDS == {"PDF附件"}
 
 

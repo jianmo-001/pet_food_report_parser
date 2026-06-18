@@ -4,6 +4,7 @@ import csv
 import json
 import re
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 from .models import ParsedReport
@@ -84,6 +85,7 @@ def to_main_fields(report: ParsedReport, pdf_file_name: str | None = None) -> di
         "客户地址": _first_extra(extra, "客户地址", "委托单位地址"),
         "检测机构": report.lab,
         "报告日期": normalize_date(report.report_date),
+        "报告过期时间": _add_one_year(normalize_date(report.report_date)),
         "样品接收日期": normalize_date(_first_extra(extra, "样品接收日期", "到样日期", "到样时间")),
         "检测开始日期": test_start,
         "检测结束日期": test_end,
@@ -204,6 +206,21 @@ def _json_if_needed(value: object) -> object:
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False)
     return value
+
+
+def _add_one_year(date_str: object) -> str | None:
+    """报告过期时间 = 报告日期 + 1 年（入参/出参均为 YYYY-MM-DD 字符串）。"""
+    if not isinstance(date_str, str) or len(date_str) < 10:
+        return None
+    try:
+        date_value = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    try:
+        expiry = date_value.replace(year=date_value.year + 1)
+    except ValueError:  # 2 月 29 日 -> 次年 2 月 28 日
+        expiry = date_value.replace(year=date_value.year + 1, day=28)
+    return expiry.isoformat()
 
 
 def _split_brand_product(sample_name: str | None) -> tuple[str | None, str | None]:
